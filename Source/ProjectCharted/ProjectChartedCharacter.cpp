@@ -14,86 +14,81 @@
 #include "GameFramework/Actor.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/SkeletalMesh.h"
+#include "Components/InputComponent.h"
 
 AProjectChartedCharacter::AProjectChartedCharacter()
 {
-	// Set size for collision capsule
-	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-		
-	// Don't rotate when the controller rotates. Let that just affect the camera.
-	bUseControllerRotationPitch = false;
-	bUseControllerRotationYaw = false;
-	bUseControllerRotationRoll = false;
+    // Capsule
+    GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
-	// Configure character movement
-	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
+    // Camera boom
+    CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+    CameraBoom->SetupAttachment(RootComponent);
+    CameraBoom->TargetArmLength = 300.0f;
+    CameraBoom->bUsePawnControlRotation = true;
 
-	// Note: For faster iteration times these variables, and many more, can be tweaked in the Character Blueprint
-	// instead of recompiling to adjust them
-	GetCharacterMovement()->JumpZVelocity = 500.f;
-	GetCharacterMovement()->AirControl = 0.35f;
-	GetCharacterMovement()->MaxWalkSpeed = 500.f;
-	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
-	GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
-	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+    // Camera
+    FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
+    FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+    FollowCamera->bUsePawnControlRotation = false;
 
-	// Create a camera boom (pulls in towards the player if there is a collision)
-	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
-	CameraBoom->SetupAttachment(RootComponent);
-	CameraBoom->TargetArmLength = 300.0f;
-	CameraBoom->bUsePawnControlRotation = true;
+    // Mouvement
+    bUseControllerRotationYaw = false;
+    bUseControllerRotationPitch = false;
+    bUseControllerRotationRoll = false;
+    GetCharacterMovement()->bOrientRotationToMovement = true;
+    GetCharacterMovement()->RotationRate = FRotator(0.f, 540.f, 0.f);
 
-	// Create a follow camera
-	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
-	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-	FollowCamera->bUsePawnControlRotation = false;
-
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
-	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
-
-	bReplicates = true;
-	CurrentWeapon = nullptr;
-
-	// Affecte le mesh squelette du personnage
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshObj(TEXT("/Game/Characters/Mannequins/Meshes/SK_Mannequin.SK_Mannequin"));
-	if (MeshObj.Succeeded())
-	{
-		GetMesh()->SetSkeletalMesh(MeshObj.Object);
-		// Optionnel : ajuste la position/rotation du mesh si besoin
-		GetMesh()->SetRelativeLocation(FVector(0.f, 0.f, -90.f));
-		GetMesh()->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
-	}
-
-    // --- ADS (Aim Down Sight) ---
+    // ADS
+    bIsAiming = false;
     DefaultFOV = 90.f;
     AimFOV = 60.f;
     AimInterpSpeed = 10.f;
-    bIsAiming = false;
+
+    // Note: For faster iteration times these variables, and many more, can be tweaked in the Character Blueprint
+    // instead of recompiling to adjust them
+    GetCharacterMovement()->JumpZVelocity = 500.f;
+    GetCharacterMovement()->AirControl = 0.35f;
+    GetCharacterMovement()->MaxWalkSpeed = 500.f;
+    GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
+    GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
+    GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+
+    // Affecte le mesh squelette du personnage (nouveau chemin)
+    static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshObj(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
+    if (MeshObj.Succeeded())
+    {
+        GetMesh()->SetSkeletalMesh(MeshObj.Object);
+        GetMesh()->SetRelativeLocation(FVector(0.f, 0.f, -90.f));
+        GetMesh()->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
+    }
+
+    bReplicates = true;
+    CurrentWeapon = nullptr;
 }
 
 void AProjectChartedCharacter::BeginPlay()
 {
-	Super::BeginPlay();
+    Super::BeginPlay();
 
-	if (HasAuthority() && !CurrentWeapon)
-	{
-		// Spawn l'arme côté serveur uniquement
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.Instigator = this;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    if (HasAuthority() && !CurrentWeapon)
+    {
+        // Spawn l'arme côté serveur uniquement
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.Owner = this;
+        SpawnParams.Instigator = this;
+        SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-		CurrentWeapon = GetWorld()->SpawnActor<AWeapon>(AWeapon::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
-		if (CurrentWeapon)
-		{
-			AttachWeaponToSocket();
-		}
-	}
-	else if (CurrentWeapon)
-	{
-		AttachWeaponToSocket();
-	}
+        CurrentWeapon = GetWorld()->SpawnActor<AWeapon>(AWeapon::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+        if (CurrentWeapon)
+        {
+            AttachWeaponToSocket();
+        }
+    }
+    else if (CurrentWeapon)
+    {
+        AttachWeaponToSocket();
+    }
 
     // Initialiser le FOV par défaut
     if (FollowCamera)
@@ -102,12 +97,34 @@ void AProjectChartedCharacter::BeginPlay()
     }
 }
 
+void AProjectChartedCharacter::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+    UpdateAim(DeltaTime);
+}
+
 void AProjectChartedCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	Super::SetupPlayerInputComponent(PlayerInputComponent);
-	PlayerInputComponent->BindAction("Fire", IE_Pressed, this, &AProjectChartedCharacter::OnFire);
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+    // Déplacement ZQSD/WASD
+    PlayerInputComponent->BindAxis("MoveForward", this, &AProjectChartedCharacter::MoveForward);
+    PlayerInputComponent->BindAxis("MoveRight", this, &AProjectChartedCharacter::MoveRight);
+
+    // Caméra souris
+    PlayerInputComponent->BindAxis("Turn", this, &AProjectChartedCharacter::Turn);
+    PlayerInputComponent->BindAxis("LookUp", this, &AProjectChartedCharacter::LookUp);
+
+    // Saut
+    PlayerInputComponent->BindAction("Jump", IE_Pressed, this, &AProjectChartedCharacter::StartJump);
+    PlayerInputComponent->BindAction("Jump", IE_Released, this, &AProjectChartedCharacter::StopJump);
+
+    // Visée (clic droit)
     PlayerInputComponent->BindAction("Aim", IE_Pressed, this, &AProjectChartedCharacter::OnAimPressed);
     PlayerInputComponent->BindAction("Aim", IE_Released, this, &AProjectChartedCharacter::OnAimReleased);
+
+    // Tir (clic gauche)
+    PlayerInputComponent->BindAction("Fire", IE_Pressed, this, &AProjectChartedCharacter::OnFire);
 }
 
 // --- Réplication ---
@@ -166,7 +183,6 @@ void AProjectChartedCharacter::OnFire()
 void AProjectChartedCharacter::OnAimPressed()
 {
     bIsAiming = true;
-    // Optionnel : ralentir la vitesse de déplacement ici
     GetCharacterMovement()->MaxWalkSpeed = 250.f;
 }
 
@@ -184,12 +200,6 @@ void AProjectChartedCharacter::UpdateAim(float DeltaTime)
         float NewFOV = FMath::FInterpTo(FollowCamera->FieldOfView, TargetFOV, DeltaTime, AimInterpSpeed);
         FollowCamera->SetFieldOfView(NewFOV);
     }
-}
-
-void AProjectChartedCharacter::Tick(float DeltaTime)
-{
-    Super::Tick(DeltaTime);
-    UpdateAim(DeltaTime);
 }
 
 // --- Bonus : Ramasser une arme au sol ---
@@ -213,3 +223,43 @@ void AProjectChartedCharacter::ServerPickupWeapon_Implementation(AActor* WeaponA
     }
 }
 bool AProjectChartedCharacter::ServerPickupWeapon_Validate(AActor* WeaponActor) { return true; }
+
+void AProjectChartedCharacter::MoveForward(float Value)
+{
+    if (Controller && Value != 0.0f)
+    {
+        const FRotator YawRotation(0, Controller->GetControlRotation().Yaw, 0);
+        const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+        AddMovementInput(Direction, Value);
+    }
+}
+
+void AProjectChartedCharacter::MoveRight(float Value)
+{
+    if (Controller && Value != 0.0f)
+    {
+        const FRotator YawRotation(0, Controller->GetControlRotation().Yaw, 0);
+        const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+        AddMovementInput(Direction, Value);
+    }
+}
+
+void AProjectChartedCharacter::Turn(float Value)
+{
+    AddControllerYawInput(Value);
+}
+
+void AProjectChartedCharacter::LookUp(float Value)
+{
+    AddControllerPitchInput(Value);
+}
+
+void AProjectChartedCharacter::StartJump()
+{
+    Jump();
+}
+
+void AProjectChartedCharacter::StopJump()
+{
+    StopJumping();
+}

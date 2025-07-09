@@ -2,20 +2,14 @@
 
 
 #include "ProjectChartedPlayerController.h"
-#include "EnhancedInputSubsystems.h"
-#include "Engine/LocalPlayer.h"
-#include "InputMappingContext.h"
 
-void AProjectChartedPlayerController::SetupInputComponent()
+void AProjectChartedPlayerController::BeginPlay()
 {
-	Super::SetupInputComponent();
-
-	// Add Input Mapping Contexts
-	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-	{
-		for (UInputMappingContext* CurrentContext : DefaultMappingContexts)
-		{
-			Subsystem->AddMappingContext(CurrentContext, 0);
-		}
-	}
+	Super::BeginPlay();
+	bShowMouseCursor = false;
+	bEnableClickEvents = false;
+	bEnableMouseOverEvents = false;
+	SetInputMode(FInputModeGameOnly());
 }
+
+// Suppression de SetupInputComponent (non nécessaire ici)

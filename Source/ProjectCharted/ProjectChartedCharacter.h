@@ -54,6 +54,15 @@ protected:
     float AimFOV = 60.f;
     float AimInterpSpeed = 10.f;
 
+    void MoveForward(float Value);
+    void MoveRight(float Value);
+    void Turn(float Value);
+    void LookUp(float Value);
+
+    // Saut
+    void StartJump();
+    void StopJump();
+
 public:
 
     // Fonction pour équiper une arme

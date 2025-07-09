@@ -6,24 +6,16 @@
 #include "GameFramework/PlayerController.h"
 #include "ProjectChartedPlayerController.generated.h"
 
-class UInputMappingContext;
-
 /**
  *  Basic PlayerController class for a third person game
  *  Manages input mappings
  */
-UCLASS(abstract)
-class AProjectChartedPlayerController : public APlayerController
+UCLASS()
+class PROJECTCHARTED_API AProjectChartedPlayerController : public APlayerController
 {
 	GENERATED_BODY()
-	
+
 protected:
-
-	/** Input Mapping Contexts */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category ="Input", meta = (AllowPrivateAccess = "true"))
-	TArray<UInputMappingContext*> DefaultMappingContexts;
-
-	/** Input mapping context setup */
-	virtual void SetupInputComponent() override;
-
+	virtual void BeginPlay() override;
+    // Suppression de SetupInputComponent (non nécessaire ici)
 };
