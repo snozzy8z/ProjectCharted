@@ -24,13 +24,37 @@ AProjectChartedCharacter::AProjectChartedCharacter()
     // Camera boom
     CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
     CameraBoom->SetupAttachment(RootComponent);
-    CameraBoom->TargetArmLength = 300.0f;
+    DefaultArmLength = 350.0f; // Un peu plus loin par défaut
+    AimArmLength = 160.0f;    // Plus proche en visée
+    CameraBoom->TargetArmLength = DefaultArmLength;
     CameraBoom->bUsePawnControlRotation = true;
+    // Nouvelle position centrée derrière le personnage
+    DefaultSocketOffset = FVector(30.f, 75.f, 75.f); // Y=75 pour caméra épaule droite (plus proche de la gauche)
+    AimSocketOffset = FVector(50.f, 80.f, 80.f);    // Y=80 pour visée à droite, Z=80 pour surélever
+    DefaultSocketOffsetLeft = FVector(30.f, -75.f, 75.f); // Y=-75 pour caméra épaule gauche
+    AimSocketOffsetLeft = FVector(50.f, -80.f, 80.f);    // Y=-80 pour visée à gauche, Z=80 pour surélever
+    CameraBoom->SocketOffset = DefaultSocketOffset;
+    CameraBoom->bEnableCameraLag = true;
+    CameraBoom->CameraLagSpeed = 10.0f;
 
-    // Camera
-    FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
-    FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-    FollowCamera->bUsePawnControlRotation = false;
+    // Camera épaule droite
+    RightShoulderCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("RightShoulderCamera"));
+    RightShoulderCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+    DefaultFOV = 90.0f;
+    AimFOV = 58.0f; // FOV plus serré en visée
+    RightShoulderCamera->FieldOfView = DefaultFOV;
+    RightShoulderCamera->bUsePawnControlRotation = false;
+    RightShoulderCamera->SetActive(true);
+
+    // Camera épaule gauche
+    LeftShoulderCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("LeftShoulderCamera"));
+    LeftShoulderCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+    LeftShoulderCamera->FieldOfView = DefaultFOV;
+    LeftShoulderCamera->bUsePawnControlRotation = false;
+    LeftShoulderCamera->SetActive(false);
+
+    bIsAiming = false;
+    AimInterpSpeed = 10.0f;
 
     // Mouvement
     bUseControllerRotationYaw = false;
@@ -38,6 +62,13 @@ AProjectChartedCharacter::AProjectChartedCharacter()
     bUseControllerRotationRoll = false;
     GetCharacterMovement()->bOrientRotationToMovement = true;
     GetCharacterMovement()->RotationRate = FRotator(0.f, 540.f, 0.f);
+
+    // Mouvement fluide orienté vers la direction du déplacement (style Uncharted)
+    bUseControllerRotationYaw = false;
+    bUseControllerRotationPitch = false;
+    bUseControllerRotationRoll = false;
+    GetCharacterMovement()->bOrientRotationToMovement = true;
+    GetCharacterMovement()->RotationRate = FRotator(0.f, 540.f, 0.f); // Rotation rapide et naturelle
 
     // ADS
     bIsAiming = false;
@@ -54,13 +85,19 @@ AProjectChartedCharacter::AProjectChartedCharacter()
     GetCharacterMovement()->BrakingDecelerationWalking = 2000.f;
     GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 
-    // Affecte le mesh squelette du personnage (nouveau chemin)
+    // Affecte le mesh squelette du personnage (SKM_Manny_Simple)
     static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshObj(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
     if (MeshObj.Succeeded())
     {
         GetMesh()->SetSkeletalMesh(MeshObj.Object);
         GetMesh()->SetRelativeLocation(FVector(0.f, 0.f, -90.f));
         GetMesh()->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
+        // Affecte le Blueprint d'animation Unarmed
+        static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Game/Characters/Mannequins/Anims/Unarmed/ABP_Unarmed.ABP_Unarmed_C"));
+        if (AnimBPClass.Succeeded())
+        {
+            GetMesh()->SetAnimInstanceClass(AnimBPClass.Class);
+        }
     }
 
     bReplicates = true;
@@ -91,15 +128,16 @@ void AProjectChartedCharacter::BeginPlay()
     }
 
     // Initialiser le FOV par défaut
-    if (FollowCamera)
+    if (RightShoulderCamera)
     {
-        DefaultFOV = FollowCamera->FieldOfView;
+        DefaultFOV = RightShoulderCamera->FieldOfView;
     }
 }
 
 void AProjectChartedCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+    UpdateCameraShoulder(DeltaTime);
     UpdateAim(DeltaTime);
 }
 
@@ -125,6 +163,11 @@ void AProjectChartedCharacter::SetupPlayerInputComponent(UInputComponent* Player
 
     // Tir (clic gauche)
     PlayerInputComponent->BindAction("Fire", IE_Pressed, this, &AProjectChartedCharacter::OnFire);
+
+    PlayerInputComponent->BindAction("Aim", IE_Pressed, this, &AProjectChartedCharacter::StartAiming);
+    PlayerInputComponent->BindAction("Aim", IE_Released, this, &AProjectChartedCharacter::StopAiming);
+
+    PlayerInputComponent->BindAction("ToggleShoulder", IE_Pressed, this, &AProjectChartedCharacter::ToggleShoulder);
 }
 
 // --- Réplication ---
@@ -190,15 +233,44 @@ void AProjectChartedCharacter::OnAimReleased()
 {
     bIsAiming = false;
     GetCharacterMovement()->MaxWalkSpeed = 500.f;
+    bIsRightShoulder = true; // Revient à l'épaule droite
 }
 
 void AProjectChartedCharacter::UpdateAim(float DeltaTime)
 {
-    if (FollowCamera)
+    if (CameraBoom && RightShoulderCamera && LeftShoulderCamera)
     {
+        float TargetArmLength = bIsAiming ? AimArmLength : DefaultArmLength;
         float TargetFOV = bIsAiming ? AimFOV : DefaultFOV;
-        float NewFOV = FMath::FInterpTo(FollowCamera->FieldOfView, TargetFOV, DeltaTime, AimInterpSpeed);
-        FollowCamera->SetFieldOfView(NewFOV);
+        FVector TargetOffset;
+        if (bIsRightShoulder)
+        {
+            TargetOffset = bIsAiming ? AimSocketOffset : DefaultSocketOffset;
+        }
+        else
+        {
+            TargetOffset = bIsAiming ? AimSocketOffsetLeft : DefaultSocketOffsetLeft;
+        }
+        CameraBoom->TargetArmLength = FMath::FInterpTo(CameraBoom->TargetArmLength, TargetArmLength, DeltaTime, AimInterpSpeed);
+        FVector Offset = CameraBoom->SocketOffset;
+        Offset.X = FMath::FInterpTo(Offset.X, TargetOffset.X, DeltaTime, AimInterpSpeed);
+        Offset.Y = FMath::FInterpTo(Offset.Y, TargetOffset.Y, DeltaTime, AimInterpSpeed);
+        Offset.Z = FMath::FInterpTo(Offset.Z, TargetOffset.Z, DeltaTime, AimInterpSpeed);
+        CameraBoom->SocketOffset = Offset;
+
+        // Active la bonne caméra
+        if (bIsRightShoulder)
+        {
+            RightShoulderCamera->SetActive(true);
+            LeftShoulderCamera->SetActive(false);
+            RightShoulderCamera->SetFieldOfView(FMath::FInterpTo(RightShoulderCamera->FieldOfView, TargetFOV, DeltaTime, AimInterpSpeed));
+        }
+        else
+        {
+            RightShoulderCamera->SetActive(false);
+            LeftShoulderCamera->SetActive(true);
+            LeftShoulderCamera->SetFieldOfView(FMath::FInterpTo(LeftShoulderCamera->FieldOfView, TargetFOV, DeltaTime, AimInterpSpeed));
+        }
     }
 }
 
@@ -251,7 +323,7 @@ void AProjectChartedCharacter::Turn(float Value)
 
 void AProjectChartedCharacter::LookUp(float Value)
 {
-    AddControllerPitchInput(Value);
+    AddControllerPitchInput(-Value); // Inversion de l'axe Y pour la souris
 }
 
 void AProjectChartedCharacter::StartJump()
@@ -262,4 +334,36 @@ void AProjectChartedCharacter::StartJump()
 void AProjectChartedCharacter::StopJump()
 {
     StopJumping();
+}
+
+void AProjectChartedCharacter::StartAiming()
+{
+    bIsAiming = true;
+}
+
+void AProjectChartedCharacter::StopAiming()
+{
+    bIsAiming = false;
+}
+
+void AProjectChartedCharacter::UpdateCameraShoulder(float DeltaTime)
+{
+    if (CameraBoom)
+    {
+        FVector TargetOffset = bIsAiming ? ShoulderCameraOffset : DefaultCameraOffset;
+        FVector CurrentOffset = CameraBoom->SocketOffset;
+        FVector NewOffset;
+        NewOffset.X = FMath::FInterpTo(CurrentOffset.X, TargetOffset.X, DeltaTime, CameraLerpSpeed);
+        NewOffset.Y = FMath::FInterpTo(CurrentOffset.Y, TargetOffset.Y, DeltaTime, CameraLerpSpeed);
+        NewOffset.Z = FMath::FInterpTo(CurrentOffset.Z, TargetOffset.Z, DeltaTime, CameraLerpSpeed);
+        CameraBoom->SocketOffset = NewOffset;
+    }
+}
+
+void AProjectChartedCharacter::ToggleShoulder()
+{
+    if (bIsAiming) // Ne change d'épaule que si on vise
+    {
+        bIsRightShoulder = !bIsRightShoulder;
+    }
 }
