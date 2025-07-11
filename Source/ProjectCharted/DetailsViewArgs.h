@@ -1,0 +1,3 @@
+#include "Templates/Optional.h"
+
+// ...existing code...
